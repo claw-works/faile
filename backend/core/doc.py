@@ -65,7 +65,7 @@ def _convert_pptx(data: bytes) -> dict:
                     text = para.text.strip()
                     if not text:
                         continue
-                    if hasattr(shape, 'placeholder_format') and shape.placeholder_format:
+                    if shape.is_placeholder and shape.placeholder_format:
                         ph_idx = shape.placeholder_format.idx
                         if ph_idx == 0:  # title
                             slide_lines[0] = f"## Slide {slide_num}: {text}"
