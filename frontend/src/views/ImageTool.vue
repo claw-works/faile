@@ -9,8 +9,20 @@
         拖拽或点击上传图片
       </div>
 
-      <div v-else class="image-wrapper">
-        <img ref="cropImg" :src="originalUrl" class="preview-img" />
+      <div v-else class="image-wrapper" ref="imageWrapper">
+        <img ref="cropImg" :src="originalUrl" class="preview-img" @load="onImageLoad" />
+        <!-- 裁切遮罩：确认裁切后显示 -->
+        <svg v-if="cropData && !cropMode" class="crop-overlay" :viewBox="`0 0 ${naturalW} ${naturalH}`" preserveAspectRatio="none">
+          <defs>
+            <mask id="cropMask">
+              <rect width="100%" height="100%" fill="white" />
+              <rect :x="cropData.x" :y="cropData.y" :width="cropData.w" :height="cropData.h" fill="black" />
+            </mask>
+          </defs>
+          <rect width="100%" height="100%" fill="rgba(0,0,0,0.55)" mask="url(#cropMask)" />
+          <rect :x="cropData.x" :y="cropData.y" :width="cropData.w" :height="cropData.h"
+            fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="6 3" />
+        </svg>
       </div>
     </div>
 
@@ -84,6 +96,8 @@ export default {
       cropData: null,
       cropper: null,
       loading: false,
+      naturalW: 1,
+      naturalH: 1,
     }
   },
   beforeUnmount() {
@@ -97,6 +111,10 @@ export default {
     onFileChange(e) {
       const f = e.target.files[0]
       if (f) this.loadFile(f)
+    },
+    onImageLoad(e) {
+      this.naturalW = e.target.naturalWidth
+      this.naturalH = e.target.naturalHeight
     },
     loadFile(f) {
       this.destroyCropper()
@@ -178,7 +196,8 @@ h2 { margin-bottom: 20px; }
 }
 .upload-area:hover { border-color: #4f46e5; }
 .upload-placeholder { cursor: pointer; color: #999; font-size: 16px; padding: 60px; }
-.image-wrapper { width: 100%; }
+.image-wrapper { width: 100%; position: relative; }
+.crop-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .preview-img { max-width: 100%; display: block; }
 
 .toolbar {
