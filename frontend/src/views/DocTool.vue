@@ -12,29 +12,22 @@
       {{ loading ? '转换中...' : '开始转换' }}
     </button>
 
-    <div v-if="result" class="result">
-      <div class="result-tabs">
-        <button :class="{ active: tab === 'preview' }" @click="tab = 'preview'">预览</button>
-        <button :class="{ active: tab === 'raw' }" @click="tab = 'raw'">Markdown 源码</button>
-        <button v-if="result.images.length" :class="{ active: tab === 'images' }" @click="tab = 'images'">
-          图片 ({{ result.images.length }})
+    <div v-if="preview" class="result">
+      <div class="result-header">
+        <span>✅ 转换完成</span>
+        <button class="btn-download" @click="download">
+          {{ hasImages ? '下载 zip（含图片）' : '下载 .md' }}
         </button>
       </div>
 
-      <div v-if="tab === 'preview'" class="markdown-preview" v-html="renderedMarkdown"></div>
-
-      <div v-if="tab === 'raw'" class="raw-code">
-        <pre>{{ result.markdown }}</pre>
-        <button class="btn-download" @click="downloadMarkdown">下载 .md</button>
+      <div class="result-tabs">
+        <button :class="{ active: tab === 'preview' }" @click="tab = 'preview'">预览</button>
+        <button :class="{ active: tab === 'raw' }" @click="tab = 'raw'">Markdown 源码</button>
       </div>
 
-      <div v-if="tab === 'images'" class="images-grid">
-        <div v-for="img in result.images" :key="img.filename" class="img-card">
-          <img :src="`data:${img.mime};base64,${img.base64}`" />
-          <a :href="`data:${img.mime};base64,${img.base64}`" :download="img.filename" class="btn-download-sm">
-            {{ img.filename }}
-          </a>
-        </div>
+      <div v-if="tab === 'preview'" class="markdown-preview" v-html="renderedMarkdown"></div>
+      <div v-if="tab === 'raw'" class="raw-code">
+        <pre>{{ preview.markdown }}</pre>
       </div>
     </div>
   </div>
@@ -49,14 +42,16 @@ export default {
     return {
       file: null,
       filename: null,
-      result: null,
+      preview: null,      // { markdown, hasImages }
+      downloadBlob: null, // 原始响应 blob（zip 或 md）
+      hasImages: false,
       loading: false,
       tab: 'preview',
     }
   },
   computed: {
     renderedMarkdown() {
-      return this.result ? marked(this.result.markdown) : ''
+      return this.preview ? marked(this.preview.markdown) : ''
     }
   },
   methods: {
@@ -71,7 +66,8 @@ export default {
     loadFile(f) {
       this.file = f
       this.filename = f.name
-      this.result = null
+      this.preview = null
+      this.downloadBlob = null
     },
     async convert() {
       if (!this.file) return
@@ -79,8 +75,21 @@ export default {
       const form = new FormData()
       form.append('file', this.file)
       try {
-        const res = await axios.post('/api/doc/convert', form)
-        this.result = res.data
+        const res = await axios.post('/api/doc/convert', form, { responseType: 'blob' })
+        this.downloadBlob = res.data
+        const contentType = res.headers['content-type'] || ''
+
+        if (contentType.includes('zip')) {
+          // zip：解压读取 document.md 用于预览
+          this.hasImages = true
+          const markdown = await this.extractMarkdownFromZip(res.data)
+          this.preview = { markdown }
+        } else {
+          // 纯 markdown
+          this.hasImages = false
+          const markdown = await res.data.text()
+          this.preview = { markdown }
+        }
         this.tab = 'preview'
       } catch (e) {
         alert('转换失败: ' + (e.response?.data?.detail || e.message))
@@ -88,13 +97,27 @@ export default {
         this.loading = false
       }
     },
-    downloadMarkdown() {
-      const blob = new Blob([this.result.markdown], { type: 'text/markdown' })
-      const url = URL.createObjectURL(blob)
+    async extractMarkdownFromZip(blob) {
+      // 用 JSZip 解压读取 document.md
+      try {
+        const JSZip = (await import('jszip')).default
+        const zip = await JSZip.loadAsync(blob)
+        const mdFile = zip.file('document.md')
+        if (mdFile) return await mdFile.async('string')
+      } catch (e) {
+        console.warn('JSZip not available, showing placeholder')
+      }
+      return '（zip 包含图片，请下载后查看）'
+    },
+    download() {
+      if (!this.downloadBlob) return
+      const url = URL.createObjectURL(this.downloadBlob)
       const a = document.createElement('a')
       a.href = url
-      a.download = this.filename.replace(/\.[^.]+$/, '.md')
+      const stem = this.filename.replace(/\.[^.]+$/, '')
+      a.download = this.hasImages ? `${stem}.zip` : `${stem}.md`
       a.click()
+      URL.revokeObjectURL(url)
     }
   }
 }
@@ -111,6 +134,7 @@ h2 { margin-bottom: 20px; }
 .btn-primary { background: #4f46e5; color: white; border: none; padding: 10px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; }
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 .result { margin-top: 24px; background: white; border-radius: 12px; overflow: hidden; }
+.result-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid #eee; }
 .result-tabs { display: flex; border-bottom: 1px solid #eee; }
 .result-tabs button { padding: 12px 20px; border: none; background: none; cursor: pointer; color: #666; }
 .result-tabs button.active { color: #4f46e5; border-bottom: 2px solid #4f46e5; font-weight: 600; }
@@ -124,9 +148,5 @@ h2 { margin-bottom: 20px; }
 .markdown-preview :deep(td), .markdown-preview :deep(th) { border: 1px solid #ddd; padding: 8px 12px; }
 .raw-code { padding: 24px; }
 .raw-code pre { background: #f8f8f8; padding: 16px; border-radius: 8px; overflow: auto; font-size: 13px; max-height: 500px; }
-.btn-download { display: inline-block; margin-top: 12px; background: #16a34a; color: white; padding: 8px 20px; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; }
-.images-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; padding: 24px; }
-.img-card { display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.img-card img { max-width: 100%; border-radius: 8px; border: 1px solid #eee; }
-.btn-download-sm { font-size: 12px; color: #4f46e5; text-decoration: none; word-break: break-all; text-align: center; }
+.btn-download { background: #16a34a; color: white; padding: 8px 20px; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; font-size: 14px; }
 </style>
