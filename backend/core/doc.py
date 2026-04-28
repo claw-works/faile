@@ -1,0 +1,85 @@
+import io
+import base64
+import zipfile
+from pathlib import Path
+
+
+def convert_document(data: bytes, filename: str) -> dict:
+    ext = Path(filename).suffix.lower()
+    if ext == ".pdf":
+        return _convert_pdf(data)
+    elif ext in (".docx", ".doc"):
+        return _convert_docx(data)
+    else:
+        return {"markdown": "", "images": [], "error": f"Unsupported format: {ext}"}
+
+
+def _convert_pdf(data: bytes) -> dict:
+    import fitz  # pymupdf
+
+    doc = fitz.open(stream=data, filetype="pdf")
+    md_parts = []
+    images = []
+
+    for page_num, page in enumerate(doc):
+        text = page.get_text("markdown")
+        if text.strip():
+            md_parts.append(f"## Page {page_num + 1}\n\n{text}")
+
+        for img_index, img in enumerate(page.get_images(full=True)):
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+            img_bytes = base_image["image"]
+            ext = base_image["ext"]
+            img_name = f"page{page_num + 1}_img{img_index + 1}.{ext}"
+            images.append({
+                "filename": img_name,
+                "base64": base64.b64encode(img_bytes).decode(),
+                "mime": f"image/{ext}",
+            })
+
+    return {"markdown": "\n\n".join(md_parts), "images": images}
+
+
+def _convert_docx(data: bytes) -> dict:
+    from docx import Document
+    from docx.oxml.ns import qn
+    import re
+
+    doc = Document(io.BytesIO(data))
+    md_parts = []
+    images = []
+    img_counter = 0
+
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            md_parts.append("")
+            continue
+        style = para.style.name if para.style else ""
+        if style.startswith("Heading 1"):
+            md_parts.append(f"# {text}")
+        elif style.startswith("Heading 2"):
+            md_parts.append(f"## {text}")
+        elif style.startswith("Heading 3"):
+            md_parts.append(f"### {text}")
+        elif style.startswith("List"):
+            md_parts.append(f"- {text}")
+        else:
+            md_parts.append(text)
+
+    # Extract images from relationships
+    for rel in doc.part.rels.values():
+        if "image" in rel.reltype:
+            img_counter += 1
+            img_data = rel.target_part.blob
+            content_type = rel.target_part.content_type
+            ext = content_type.split("/")[-1]
+            img_name = f"image{img_counter}.{ext}"
+            images.append({
+                "filename": img_name,
+                "base64": base64.b64encode(img_data).decode(),
+                "mime": content_type,
+            })
+
+    return {"markdown": "\n\n".join(md_parts), "images": images}
