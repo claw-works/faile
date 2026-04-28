@@ -9,20 +9,15 @@
         拖拽或点击上传图片
       </div>
 
-      <div v-else class="image-wrapper" ref="imageWrapper">
-        <img ref="cropImg" :src="originalUrl" class="preview-img" @load="onImageLoad" />
-        <!-- 裁切遮罩：确认裁切后显示 -->
-        <svg v-if="cropData && !cropMode" class="crop-overlay" :viewBox="`0 0 ${naturalW} ${naturalH}`" preserveAspectRatio="none">
-          <defs>
-            <mask id="cropMask">
-              <rect width="100%" height="100%" fill="white" />
-              <rect :x="cropData.x" :y="cropData.y" :width="cropData.w" :height="cropData.h" fill="black" />
-            </mask>
-          </defs>
-          <rect width="100%" height="100%" fill="rgba(0,0,0,0.55)" mask="url(#cropMask)" />
-          <rect :x="cropData.x" :y="cropData.y" :width="cropData.w" :height="cropData.h"
-            fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="6 3" />
-        </svg>
+      <!-- 裁切模式：交给 cropperjs 全权管理 -->
+      <div v-else-if="cropMode" class="cropper-host">
+        <img ref="cropImg" :src="originalUrl" />
+      </div>
+
+      <!-- 普通预览模式：canvas 叠遮罩 -->
+      <div v-else class="preview-host">
+        <img ref="previewImg" :src="originalUrl" class="preview-img" @load="redrawOverlay" />
+        <canvas ref="overlayCanvas" class="overlay-canvas"></canvas>
       </div>
     </div>
 
@@ -31,19 +26,19 @@
 
       <template v-if="!cropMode">
         <button @click="enableCrop" class="btn-secondary">✂️ 开启裁切</button>
+        <button v-if="cropData" @click="clearCrop" class="btn-secondary">🗑 清除裁切</button>
       </template>
       <template v-else>
         <button @click="applyCrop" class="btn-primary">✅ 确认裁切</button>
         <button @click="cancelCrop" class="btn-secondary">取消</button>
       </template>
 
-      <span v-if="cropData" class="crop-info">
-        已裁切 {{ cropData.w }}×{{ cropData.h }} px
-        <button @click="clearCrop" class="btn-link">清除</button>
+      <span v-if="cropData && !cropMode" class="crop-info">
+        裁切区域 {{ cropData.w }}×{{ cropData.h }} px
       </span>
     </div>
 
-    <div v-if="originalUrl" class="controls">
+    <div v-if="originalUrl && !cropMode" class="controls">
       <div class="control-group">
         <label>宽度 (px)</label>
         <input v-model.number="width" type="number" placeholder="自动" />
@@ -64,14 +59,14 @@
         <label>质量 {{ quality }}%</label>
         <input v-model.number="quality" type="range" min="10" max="100" />
       </div>
-      <button class="btn-primary" @click="processImage" :disabled="loading || cropMode">
+      <button class="btn-primary" @click="processImage" :disabled="loading">
         {{ loading ? '处理中...' : '处理图片' }}
       </button>
     </div>
 
     <div v-if="resultUrl" class="result">
       <h3>处理结果</h3>
-      <img :src="resultUrl" class="preview-img" />
+      <img :src="resultUrl" class="preview-img-result" />
       <a :href="resultUrl" :download="`result.${format}`" class="btn-download">⬇️ 下载</a>
     </div>
   </div>
@@ -93,11 +88,9 @@ export default {
       format: 'webp',
       quality: 85,
       cropMode: false,
-      cropData: null,
+      cropData: null,   // { x, y, w, h } in natural pixels
       cropper: null,
       loading: false,
-      naturalW: 1,
-      naturalH: 1,
     }
   },
   beforeUnmount() {
@@ -112,10 +105,6 @@ export default {
       const f = e.target.files[0]
       if (f) this.loadFile(f)
     },
-    onImageLoad(e) {
-      this.naturalW = e.target.naturalWidth
-      this.naturalH = e.target.naturalHeight
-    },
     loadFile(f) {
       this.destroyCropper()
       this.cropMode = false
@@ -124,38 +113,92 @@ export default {
       this.file = f
       this.originalUrl = URL.createObjectURL(f)
     },
+
+    // ── Crop ──────────────────────────────────────────────
     enableCrop() {
       this.cropMode = true
       this.$nextTick(() => {
         this.cropper = new Cropper(this.$refs.cropImg, {
           viewMode: 1,
           autoCropArea: 0.8,
-          movable: true,
           zoomable: false,
+          // 初始框：如果已有 cropData，恢复上次的框
+          ready: () => {
+            if (this.cropData) {
+              this.cropper.setData({
+                x: this.cropData.x,
+                y: this.cropData.y,
+                width: this.cropData.w,
+                height: this.cropData.h,
+              })
+            }
+          }
         })
       })
     },
     applyCrop() {
       if (this.cropper) {
-        const d = this.cropper.getData(true)
+        const d = this.cropper.getData(true) // true = rounded integers
         this.cropData = { x: d.x, y: d.y, w: d.width, h: d.height }
       }
       this.destroyCropper()
       this.cropMode = false
+      // 等 DOM 切回 preview-host 后画遮罩
+      this.$nextTick(() => this.redrawOverlay())
     },
     cancelCrop() {
       this.destroyCropper()
       this.cropMode = false
+      this.$nextTick(() => this.redrawOverlay())
     },
     clearCrop() {
       this.cropData = null
+      this.$nextTick(() => this.redrawOverlay())
     },
     destroyCropper() {
-      if (this.cropper) {
-        this.cropper.destroy()
-        this.cropper = null
-      }
+      if (this.cropper) { this.cropper.destroy(); this.cropper = null }
     },
+
+    // ── Overlay canvas ────────────────────────────────────
+    redrawOverlay() {
+      const img = this.$refs.previewImg
+      const canvas = this.$refs.overlayCanvas
+      if (!img || !canvas) return
+
+      // 图片实际渲染尺寸（contain 后的）
+      const rect = img.getBoundingClientRect()
+      canvas.width = rect.width
+      canvas.height = rect.height
+      canvas.style.width = rect.width + 'px'
+      canvas.style.height = rect.height + 'px'
+
+      const ctx = canvas.getContext('2d')
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      if (!this.cropData) return
+
+      // 缩放比：显示尺寸 / 原始尺寸
+      const scaleX = rect.width / img.naturalWidth
+      const scaleY = rect.height / img.naturalHeight
+
+      const cx = this.cropData.x * scaleX
+      const cy = this.cropData.y * scaleY
+      const cw = this.cropData.w * scaleX
+      const ch = this.cropData.h * scaleY
+
+      // 四周暗色遮罩
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      // 裁切区域镂空
+      ctx.clearRect(cx, cy, cw, ch)
+      // 裁切框边线
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([6, 3])
+      ctx.strokeRect(cx, cy, cw, ch)
+    },
+
+    // ── Process ───────────────────────────────────────────
     async processImage() {
       if (!this.file) return
       this.loading = true
@@ -190,22 +233,36 @@ h2 { margin-bottom: 20px; }
 
 .upload-area {
   border: 2px dashed #ccc; border-radius: 12px;
-  background: white; min-height: 200px;
+  background: white; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
-  overflow: hidden;
+  min-height: 200px;
 }
 .upload-area:hover { border-color: #4f46e5; }
 .upload-placeholder { cursor: pointer; color: #999; font-size: 16px; padding: 60px; }
-.image-wrapper { width: 100%; position: relative; }
-.crop-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.preview-img { max-width: 100%; display: block; }
+
+/* 裁切模式：让 cropperjs 自己撑开容器 */
+.cropper-host { width: 100%; max-height: 520px; overflow: hidden; }
+.cropper-host img { display: block; max-width: 100%; max-height: 520px; }
+
+/* 普通预览：图片 + canvas 精确叠加 */
+.preview-host { position: relative; display: inline-flex; max-width: 100%; }
+.preview-img {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+}
+.overlay-canvas {
+  position: absolute;
+  top: 0; left: 0;
+  pointer-events: none;
+}
 
 .toolbar {
   display: flex; align-items: center; gap: 10px;
   margin: 12px 0; flex-wrap: wrap;
 }
 .crop-info { font-size: 13px; color: #666; }
-.btn-link { background: none; border: none; color: #4f46e5; cursor: pointer; font-size: 13px; padding: 0 4px; }
 
 .controls {
   display: flex; flex-wrap: wrap; gap: 16px;
@@ -219,22 +276,13 @@ h2 { margin-bottom: 20px; }
 }
 .control-group input[type=range] { width: 120px; }
 
-.btn-primary {
-  background: #4f46e5; color: white; border: none;
-  padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px;
-}
+.btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; }
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-secondary {
-  background: white; color: #333; border: 1px solid #ddd;
-  padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px;
-}
+.btn-secondary { background: white; color: #333; border: 1px solid #ddd; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; }
 .btn-secondary:hover { border-color: #4f46e5; color: #4f46e5; }
 
 .result { background: white; padding: 20px; border-radius: 12px; }
 .result h3 { margin-bottom: 12px; }
-.btn-download {
-  display: inline-block; margin-top: 12px;
-  background: #16a34a; color: white;
-  padding: 8px 20px; border-radius: 8px; text-decoration: none;
-}
+.preview-img-result { max-width: 100%; max-height: 520px; display: block; border-radius: 8px; }
+.btn-download { display: inline-block; margin-top: 12px; background: #16a34a; color: white; padding: 8px 20px; border-radius: 8px; text-decoration: none; }
 </style>
