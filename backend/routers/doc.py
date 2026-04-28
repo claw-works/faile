@@ -1,8 +1,17 @@
 from fastapi import APIRouter, UploadFile, File
 from fastapi.responses import StreamingResponse
 from core.doc import convert_document
+from urllib.parse import quote
 import io
 import zipfile
+
+def content_disposition(filename: str) -> str:
+    """生成兼容中文文件名的 Content-Disposition header"""
+    ascii_name = filename.encode('ascii', errors='ignore').decode()
+    encoded_name = quote(filename)
+    if ascii_name == filename:
+        return f'attachment; filename="{filename}"'
+    return f"attachment; filename*=UTF-8''{encoded_name}"
 
 router = APIRouter()
 
@@ -18,7 +27,7 @@ async def convert(file: UploadFile = File(...)):
         return StreamingResponse(
             io.BytesIO(md_bytes),
             media_type="text/markdown",
-            headers={"Content-Disposition": f'attachment; filename="document.md"'},
+            headers={"Content-Disposition": content_disposition(stem + ".md")},
         )
 
     # 有图片就打包成 zip
@@ -34,5 +43,5 @@ async def convert(file: UploadFile = File(...)):
     return StreamingResponse(
         buf,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{stem}.zip"'},
+        headers={"Content-Disposition": content_disposition(stem + ".zip")},
     )
