@@ -3,7 +3,7 @@
     <h2>文档转 Markdown</h2>
 
     <div class="upload-area" @dragover.prevent @drop.prevent="onDrop" @click="$refs.fileInput.click()">
-      <input ref="fileInput" type="file" accept=".pdf,.docx,.doc" style="display:none" @change="onFileChange" />
+      <input ref="fileInput" type="file" accept=".pdf,.docx,.doc,.pptx,.ppt" style="display:none" @change="onFileChange" />
       <span v-if="!filename">拖拽或点击上传 PDF / Word 文档</span>
       <span v-else>📄 {{ filename }}</span>
     </div>

@@ -10,6 +10,8 @@ def convert_document(data: bytes, filename: str) -> dict:
         return _convert_pdf(data)
     elif ext in (".docx", ".doc"):
         return _convert_docx(data)
+    elif ext in (".pptx", ".ppt"):
+        return _convert_pptx(data)
     else:
         return {"markdown": "", "images": [], "error": f"Unsupported format: {ext}"}
 
@@ -46,7 +48,44 @@ def _convert_pdf(data: bytes) -> dict:
     return {"markdown": "\n\n".join(md_parts), "images": images}
 
 
-def _convert_docx(data: bytes) -> dict:
+def _convert_pptx(data: bytes) -> dict:
+    from pptx import Presentation
+
+    prs = Presentation(io.BytesIO(data))
+    md_parts = []
+    images = []
+    img_counter = 0
+
+    for slide_num, slide in enumerate(prs.slides, 1):
+        slide_lines = [f"## Slide {slide_num}"]
+
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if not text:
+                        continue
+                    if hasattr(shape, 'placeholder_format') and shape.placeholder_format:
+                        ph_idx = shape.placeholder_format.idx
+                        if ph_idx == 0:  # title
+                            slide_lines[0] = f"## Slide {slide_num}: {text}"
+                            continue
+                    slide_lines.append(text)
+
+            if shape.shape_type == 13:  # PICTURE
+                img_counter += 1
+                img_bytes = shape.image.blob
+                ext = shape.image.ext
+                img_name = f"slide{slide_num}_img{img_counter}.{ext}"
+                images.append({
+                    "filename": img_name,
+                    "base64": base64.b64encode(img_bytes).decode(),
+                    "mime": f"image/{ext}",
+                })
+
+        md_parts.append("\n\n".join(slide_lines))
+
+    return {"markdown": "\n\n---\n\n".join(md_parts), "images": images}
     from docx import Document
     from docx.oxml.ns import qn
     import re

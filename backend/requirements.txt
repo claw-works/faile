@@ -4,4 +4,5 @@ python-multipart
 Pillow
 pymupdf
 python-docx
+python-pptx
 markdownify
