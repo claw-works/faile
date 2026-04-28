@@ -2,17 +2,36 @@
   <div class="image-tool">
     <h2>图片处理</h2>
 
-    <div class="upload-area" @dragover.prevent @drop.prevent="onDrop" @click="$refs.fileInput.click()">
+    <div class="upload-area" @dragover.prevent @drop.prevent="onDrop" @click="!originalUrl && $refs.fileInput.click()">
       <input ref="fileInput" type="file" accept="image/*" style="display:none" @change="onFileChange" />
-      <span v-if="!originalUrl">拖拽或点击上传图片</span>
-      <img v-else :src="originalUrl" class="preview-img" />
+
+      <div v-if="!originalUrl" class="upload-placeholder">
+        拖拽或点击上传图片
+      </div>
+
+      <div v-else class="image-wrapper">
+        <img ref="cropImg" :src="originalUrl" class="preview-img" />
+      </div>
+    </div>
+
+    <div v-if="originalUrl" class="toolbar">
+      <button @click="$refs.fileInput.click()" class="btn-secondary">重新上传</button>
+
+      <template v-if="!cropMode">
+        <button @click="enableCrop" class="btn-secondary">✂️ 开启裁切</button>
+      </template>
+      <template v-else>
+        <button @click="applyCrop" class="btn-primary">✅ 确认裁切</button>
+        <button @click="cancelCrop" class="btn-secondary">取消</button>
+      </template>
+
+      <span v-if="cropData" class="crop-info">
+        已裁切 {{ cropData.w }}×{{ cropData.h }} px
+        <button @click="clearCrop" class="btn-link">清除</button>
+      </span>
     </div>
 
     <div v-if="originalUrl" class="controls">
-      <div class="control-group">
-        <label>裁切模式</label>
-        <button :class="{ active: cropMode }" @click="toggleCrop">{{ cropMode ? '✅ 裁切中' : '开启裁切' }}</button>
-      </div>
       <div class="control-group">
         <label>宽度 (px)</label>
         <input v-model.number="width" type="number" placeholder="自动" />
@@ -33,7 +52,7 @@
         <label>质量 {{ quality }}%</label>
         <input v-model.number="quality" type="range" min="10" max="100" />
       </div>
-      <button class="btn-primary" @click="processImage" :disabled="loading">
+      <button class="btn-primary" @click="processImage" :disabled="loading || cropMode">
         {{ loading ? '处理中...' : '处理图片' }}
       </button>
     </div>
@@ -41,18 +60,7 @@
     <div v-if="resultUrl" class="result">
       <h3>处理结果</h3>
       <img :src="resultUrl" class="preview-img" />
-      <a :href="resultUrl" :download="`result.${format}`" class="btn-download">下载</a>
-    </div>
-
-    <!-- Cropper modal -->
-    <div v-if="showCropper" class="cropper-modal">
-      <div class="cropper-container">
-        <img ref="cropImg" :src="originalUrl" />
-        <div class="cropper-actions">
-          <button @click="applyCrop" class="btn-primary">确认裁切</button>
-          <button @click="showCropper = false">取消</button>
-        </div>
-      </div>
+      <a :href="resultUrl" :download="`result.${format}`" class="btn-download">⬇️ 下载</a>
     </div>
   </div>
 </template>
@@ -73,11 +81,13 @@ export default {
       format: 'webp',
       quality: 85,
       cropMode: false,
-      showCropper: false,
       cropData: null,
       cropper: null,
       loading: false,
     }
+  },
+  beforeUnmount() {
+    this.destroyCropper()
   },
   methods: {
     onDrop(e) {
@@ -89,34 +99,44 @@ export default {
       if (f) this.loadFile(f)
     },
     loadFile(f) {
+      this.destroyCropper()
+      this.cropMode = false
+      this.cropData = null
+      this.resultUrl = null
       this.file = f
       this.originalUrl = URL.createObjectURL(f)
-      this.resultUrl = null
-      this.cropData = null
     },
-    toggleCrop() {
-      if (!this.cropMode) {
-        this.showCropper = true
-        this.cropMode = true
-        this.$nextTick(() => {
-          if (this.cropper) this.cropper.destroy()
-          this.cropper = new Cropper(this.$refs.cropImg, { viewMode: 1 })
+    enableCrop() {
+      this.cropMode = true
+      this.$nextTick(() => {
+        this.cropper = new Cropper(this.$refs.cropImg, {
+          viewMode: 1,
+          autoCropArea: 0.8,
+          movable: true,
+          zoomable: false,
         })
-      } else {
-        this.cropMode = false
-        this.cropData = null
-        if (this.cropper) { this.cropper.destroy(); this.cropper = null }
-        this.showCropper = false
-      }
+      })
     },
     applyCrop() {
       if (this.cropper) {
         const d = this.cropper.getData(true)
         this.cropData = { x: d.x, y: d.y, w: d.width, h: d.height }
+      }
+      this.destroyCropper()
+      this.cropMode = false
+    },
+    cancelCrop() {
+      this.destroyCropper()
+      this.cropMode = false
+    },
+    clearCrop() {
+      this.cropData = null
+    },
+    destroyCropper() {
+      if (this.cropper) {
         this.cropper.destroy()
         this.cropper = null
       }
-      this.showCropper = false
     },
     async processImage() {
       if (!this.file) return
@@ -149,25 +169,53 @@ export default {
 <style scoped>
 .image-tool { padding: 20px 0; }
 h2 { margin-bottom: 20px; }
+
 .upload-area {
-  border: 2px dashed #ccc; border-radius: 12px; padding: 40px;
-  text-align: center; cursor: pointer; background: white; min-height: 200px;
+  border: 2px dashed #ccc; border-radius: 12px;
+  background: white; min-height: 200px;
   display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
 }
 .upload-area:hover { border-color: #4f46e5; }
-.preview-img { max-width: 100%; max-height: 400px; border-radius: 8px; }
-.controls { display: flex; flex-wrap: wrap; gap: 16px; margin: 20px 0; align-items: flex-end; background: white; padding: 20px; border-radius: 12px; }
+.upload-placeholder { cursor: pointer; color: #999; font-size: 16px; padding: 60px; }
+.image-wrapper { width: 100%; }
+.preview-img { max-width: 100%; display: block; }
+
+.toolbar {
+  display: flex; align-items: center; gap: 10px;
+  margin: 12px 0; flex-wrap: wrap;
+}
+.crop-info { font-size: 13px; color: #666; }
+.btn-link { background: none; border: none; color: #4f46e5; cursor: pointer; font-size: 13px; padding: 0 4px; }
+
+.controls {
+  display: flex; flex-wrap: wrap; gap: 16px;
+  align-items: flex-end; background: white;
+  padding: 20px; border-radius: 12px; margin-bottom: 20px;
+}
 .control-group { display: flex; flex-direction: column; gap: 4px; }
 .control-group label { font-size: 12px; color: #666; }
-.control-group input[type=number], .control-group select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; width: 120px; }
+.control-group input[type=number], .control-group select {
+  padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; width: 120px;
+}
 .control-group input[type=range] { width: 120px; }
-.btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+
+.btn-primary {
+  background: #4f46e5; color: white; border: none;
+  padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px;
+}
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-primary.active { background: #16a34a; }
-.result { margin-top: 20px; background: white; padding: 20px; border-radius: 12px; }
+.btn-secondary {
+  background: white; color: #333; border: 1px solid #ddd;
+  padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px;
+}
+.btn-secondary:hover { border-color: #4f46e5; color: #4f46e5; }
+
+.result { background: white; padding: 20px; border-radius: 12px; }
 .result h3 { margin-bottom: 12px; }
-.btn-download { display: inline-block; margin-top: 12px; background: #16a34a; color: white; padding: 8px 20px; border-radius: 8px; text-decoration: none; }
-.cropper-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.cropper-container { background: white; padding: 20px; border-radius: 12px; max-width: 90vw; max-height: 90vh; overflow: auto; }
-.cropper-actions { display: flex; gap: 12px; margin-top: 12px; }
+.btn-download {
+  display: inline-block; margin-top: 12px;
+  background: #16a34a; color: white;
+  padding: 8px 20px; border-radius: 8px; text-decoration: none;
+}
 </style>
