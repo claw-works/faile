@@ -86,9 +86,10 @@ def _convert_pptx(data: bytes) -> dict:
         md_parts.append("\n\n".join(slide_lines))
 
     return {"markdown": "\n\n---\n\n".join(md_parts), "images": images}
+
+
+def _convert_docx(data: bytes) -> dict:
     from docx import Document
-    from docx.oxml.ns import qn
-    import re
 
     doc = Document(io.BytesIO(data))
     md_parts = []
