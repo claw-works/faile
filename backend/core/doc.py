@@ -22,8 +22,13 @@ def _convert_pdf(data: bytes) -> dict:
     images = []
 
     for page_num, page in enumerate(doc):
-        text = page.get_text("markdown")
-        if text.strip():
+        blocks = page.get_text("blocks")  # (x0,y0,x1,y1,text,block_no,block_type)
+        page_lines = []
+        for b in blocks:
+            if b[6] == 0:  # text block
+                page_lines.append(b[4].strip())
+        text = "\n\n".join(l for l in page_lines if l)
+        if text:
             md_parts.append(f"## Page {page_num + 1}\n\n{text}")
 
         for img_index, img in enumerate(page.get_images(full=True)):
